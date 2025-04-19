@@ -1,127 +1,94 @@
-import json
-import os
-import re
-from collections import Counter
+# Install tokenizers library
+!pip install tokenizers
 
-class BPETokenizer:
-    def __init__(self, vocab_size=50):
-        self.vocab_size = vocab_size
-        self.vocab = set()  # Full set of tokens
-        self.merges = []    # List of merge rules
+import matplotlib.pyplot as plt
+import numpy as np
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers
+from tokenizers.pre_tokenizers import Whitespace
+from IPython.display import Image
 
-    def train(self, corpus):
-        # Split corpus into words and count frequencies
-        words = corpus.split()
-        word_freqs = Counter(words)
-
-        # Initialize with characters (split each word into chars + </w>)
-        vocab = {word: freq for word, freq in word_freqs.items()}
-        tokenized_words = {word: list(word) + ['</w>'] for word in vocab}
-# edge case on teh last end 
-        # Add initial characters to vocab
-        # print(tokenized_words)
-        for word in tokenized_words.values():
-            self.vocab.update(word)
-        # print()
-        # print(self.vocab)
-        # Merge pairs until vocab_size is reached
-        while len(self.vocab) < self.vocab_size:
-            # Count pairs across all tokenized words
-            pairs = Counter() 
-            for word, freq in vocab.items(): 
-                tokens = tokenized_words[word]
-                for i in range(len(tokens) - 1):
-                    pairs[(tokens[i], tokens[i + 1])] += freq
-
-            if not pairs:
-                print(1)
-                break
-            # Find most frequent pair
-            best_pair = max(pairs, key=pairs.get)
-            self.merges.append(best_pair)
-            print(f"Merging {best_pair} , vocab size: {len(self.vocab)}")
-            # Merge the best pair in all words
-            for word in vocab: 
-                tokens = tokenized_words[word]
-                new_tokens = []
-                i = 0
-                while i < len(tokens):
-                    if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best_pair:
-                        new_tokens.append(tokens[i] + tokens[i + 1])
-                        i += 2
-                    else:
-                        new_tokens.append(tokens[i])
-                        i += 1
-                tokenized_words[word] = new_tokens
-                self.vocab.update(new_tokens)
-                # print(self.vocab,111)
-
-
-    def encode(self, text):
-        # Split text into words and tokenize each into characters + </w>
-        words = text.split()
-        tokens = []
-        for word in words: 
-            word_tokens = list(word) + ['</w>']
-            # Apply all merges in order
-            for pair in self.merges:
-                i = 0
-                new_tokens = []
-                while i < len(word_tokens):
-                    if i < len(word_tokens) - 1 and (word_tokens[i], word_tokens[i + 1]) == pair:
-                        new_tokens.append(word_tokens[i] + word_tokens[i + 1])
-                        i += 2
-                    else:
-                        new_tokens.append(word_tokens[i])
-                        i += 1
-                word_tokens = new_tokens
-            tokens.extend(word_tokens)
-        return tokens 
-    def decode(self, tokens):
-        text = ""
-        for token in tokens:
-            if token.endswith("</w>"):
-                text += token[:-4] + " "  # Remove '</w>' and add a space
-            else:
-                text += token
-        return text.strip() 
-
-
-train_file = './data/ptb.train.txt'
-test_file = './data/ptb.test.txt'
-
-
-# Check if files exist
-if not os.path.exists(train_file):
-    raise FileNotFoundError(f"Training file {train_file} not found!")
-if not os.path.exists(test_file):
-    raise FileNotFoundError(f"Test file {test_file} not found!")
-
-# Load the full training and test data
-with open(train_file, 'r', encoding='utf-8') as f:
-    corpus = f.read() 
+def train_bpe_tokenizer(corpus, vocab_size=100):
+    """Train a BPE tokenizer on the given corpus."""
+    # Initialize a BPE tokenizer
+    tokenizer = Tokenizer(models.BPE(unk_token="[UNK]"))
     
-with open(test_file, 'r', encoding='utf-8') as f:
-    test_sentence = f.read() 
+    # Use whitespace pre-tokenization to split on spaces
+    tokenizer.pre_tokenizer = Whitespace()
+    
+    # Train the tokenizer
+    trainer = trainers.BpeTrainer(vocab_size=vocab_size, special_tokens=["[UNK]"])
+    tokenizer.train_from_iterator(corpus, trainer)
+    
+    return tokenizer
 
-# Set vocab_size to 8001 as per the paper
-tokenizer = BPETokenizer(vocab_size=8001)
-tokenizer.train(corpus)
+def create_char_tokenizer():
+    """Create a character-level tokenizer."""
+    # Initialize a WordPiece model (used as a base, but we'll override with char-level logic)
+    tokenizer = Tokenizer(models.WordPiece(unk_token="[UNK]"))
+    
+    # Custom pre-tokenizer to split into characters
+    tokenizer.pre_tokenizer = pre_tokenizers.CharDelimiterSplit(delimiter='')
+    
+    # Since we're doing char-level, no training is needed; use a small vocab
+    return tokenizer
 
-# Save merges to a file
-merges_file = 'merges.json'
-with open(merges_file, 'w', encoding='utf-8') as f:
-    json.dump(tokenizer.merges, f)
-print(f"Merges saved to {merges_file}")
+def tokenize_and_visualize(sentence, tokenizer, title):
+    """Tokenize the sentence and visualize the tokens."""
+    # Encode the sentence
+    encoding = tokenizer.encode(sentence)
+    tokens = encoding.tokens
+    
+    # Create a color map for tokens
+    colors = plt.cm.tab20(np.linspace(0, 1, len(set(tokens))))
+    token_to_color = {token: colors[i % len(colors)] for i, token in enumerate(set(tokens))}
+    
+    # Plot setup
+    plt.figure(figsize=(12, 2))
+    x, y = 0, 0
+    for token in tokens:
+        plt.text(x, y, token, bbox=dict(facecolor=token_to_color[token], alpha=0.5))
+        x += len(token) * 0.15  # Adjust spacing based on token length
+    
+    plt.title(title)
+    plt.axis('off')
+    plt.savefig(f'{title.lower().replace(" ", "_")}.png')
+    plt.close()
+    
+    return tokens
 
-# Output results
-print("Vocabulary size:", len(tokenizer.vocab)) 
-print("Sample vocabulary:", sorted(list(tokenizer.vocab))[:20])  # Show first 20 tokens
+def main():
+    # Example sentence
+    sentence = "The quick brown fox jumps"
+    
+    # Create a small corpus (including the sentence) for BPE training
+    corpus = [
+        sentence,
+        "The fox runs fast",
+        "A quick dog jumps high",
+        "Brown foxes climb hills"
+    ]
+    
+    # Train BPE tokenizer
+    bpe_tokenizer = train_bpe_tokenizer(corpus, vocab_size=100)
+    
+    # Create character-level tokenizer
+    char_tokenizer = create_char_tokenizer()
+    
+    # Tokenize and visualize for BPE
+    bpe_tokens = tokenize_and_visualize(sentence, bpe_tokenizer, "BPE Tokenization")
+    
+    # Tokenize and visualize for character-level
+    char_tokens = tokenize_and_visualize(sentence, char_tokenizer, "Character-Level Tokenization")
+    
+    # Print results
+    print(f"Original Sentence: {sentence}")
+    print(f"\nBPE Tokens: {bpe_tokens}")
+    print(f"Character-Level Tokens: {char_tokens}")
+    
+    # Display the saved images
+    print("\nVisualizations:")
+    display(Image('bpe_tokenization.png'))
+    display(Image('character-level_tokenization.png'))
 
-# Encode a portion of the test file
-test_sentence_chunk = test_sentence[:200]  # Limit for readability
-encoded = tokenizer.encode(test_sentence_chunk)
-print("Test sentence chunk:", test_sentence_chunk)
-print("Encoded Text:", encoded)
-decoded = tokenizer.decode(encoded)
-print("Decoded Text:", decoded)
+if __name__ == "__main__":
+    main()
